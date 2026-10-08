@@ -15,7 +15,8 @@ export function Screen({ children, edges, style }: ScreenProps) {
   return (
     <SafeAreaView
       edges={edges}
-      style={[styles.screen, { backgroundColor: colors.background }, style]}>
+      style={[styles.screen, { backgroundColor: colors.background }, style]}
+    >
       {children}
     </SafeAreaView>
   );
