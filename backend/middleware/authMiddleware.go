@@ -1,13 +1,13 @@
 package middleware
 
 import (
-    "context"
+    "errors"
     "log"
 
     "social-api/config"
 
     "github.com/gofiber/fiber/v2"
-    "go.mongodb.org/mongo-driver/bson"
+    "gorm.io/gorm"
 )
 
 func AuthMiddleware(c *fiber.Ctx) error {
@@ -18,19 +18,20 @@ func AuthMiddleware(c *fiber.Ctx) error {
 
     tokenUUID := authHeader
 
-    // Connect to the users collection in MongoDB
-    collection := config.GetCollection("users")
-    var user bson.M
+    // Query the user by token using GORM
+    var dbUser config.DbUser
+    err := config.Db.Where("token = ?", tokenUUID).First(&dbUser).Error
 
-    // Check if the token UUID exists in any user's document
-    filter := bson.M{"token": tokenUUID}
-    err := collection.FindOne(context.Background(), filter).Decode(&user)
     if err != nil {
-        log.Println("Error finding token in user account:", err)
+        if errors.Is(err, gorm.ErrRecordNotFound) {
+            log.Println("Token not found in user account")
+        } else {
+            log.Println("Database error while checking token:", err)
+        }
         return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid token"})
     }
 
-    // Set the entire user account as a local
-    c.Locals("user", user)
+    // Set the user struct as a local so downstream handlers can access it
+    c.Locals("user", dbUser)
     return c.Next()
 }

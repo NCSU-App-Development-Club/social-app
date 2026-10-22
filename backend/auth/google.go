@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"os"
 	"time"
+
 	"social-api/handlers"
+	"social-api/config"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -123,7 +125,7 @@ func HandleGoogleCallback(c *fiber.Ctx) error {
 		})
 	}
 
-	user, err := handlers.SerializeSSO(&handlers.User{
+	user, err := handlers.SerializeSSO(&config.User{
 		Name:     userInfo.Name,
 		Email:    userInfo.Email,
 		Provider: "google",

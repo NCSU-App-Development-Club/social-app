@@ -1,0 +1,4 @@
+backend
+go.sum
+*.db
+.env

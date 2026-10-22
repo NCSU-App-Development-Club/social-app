@@ -1,75 +1,71 @@
 package handlers
 
 import (
-	"context"
-	"errors"
+    "errors"
+    "os"
+    "strings"
 
-	"social-api/config"
+    "social-api/config"
 
-	"github.com/google/uuid"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
+    "github.com/google/uuid"
+    "gorm.io/gorm"
 )
 
-type User struct {
-	Name     string `json:"name"`
-	Email    string `json:"email"`
-	Provider string `json:"provider"`
-	Unique   string `json:"unique"`
-	Picture  string `json:"picture"`
-}
+func SerializeSSO(data *config.User) (string, error) {
+    var dbUser config.DbUser
 
-type DbUser struct {
-	Name     string `bson:"name"`
-	Email    string `bson:"email"`
-	Token    string `bson:"token"`
-	Avatar   string `bson:"avatar"`
-}
+    // Enforce email domain restriction if DEV is not set to TRUE
+    if os.Getenv("DEV") != "TRUE" {
+        if !strings.HasSuffix(data.Email, "@ncsu.edu") {
+            return "", errors.New("unauthorized email domain: only @ncsu.edu accounts are permitted")
+        }
+    }
 
-func SerializeSSO(data *User) (string, error) {
-	var result bson.M
-	err := config.GetCollection("users").FindOne(context.TODO(), bson.D{{Key: "email", Value: data.Email}, {Key: "provider", Value: data.Provider}}).Decode(&result)
+    // 1. Generate a new UUID token upfront
+    token, err := uuid.NewRandom()
+    if err != nil {
+        return "", errors.New("failed to generate UUID")
+    }
+    newToken := token.String()
 
-	if err == mongo.ErrNoDocuments {
-		token, err := uuid.NewRandom()
-		if err != nil {
-			return "", errors.New("UUID")
-		}
-		// Account does not exist, create it
-		user := DbUser{
-			Name:     data.Name,
-			Email:    data.Email,
-			Token:    token.String(),
-			Avatar:   data.Picture,
-		}
+    // 2. Query the database for an existing user by Email and Provider
+    err = config.Db.Where("email = ? AND provider = ?", data.Email, data.Provider).First(&dbUser).Error
 
-		// Insert the user object into the MongoDB database
-		_, err = config.GetCollection("users").InsertOne(context.TODO(), user)
-		if err != nil {
-			return "", errors.New("insert")
-		}
+    if errors.Is(err, gorm.ErrRecordNotFound) {
+        // Account does not exist, create a new record mapping all whiteboard fields
+        newUser := config.DbUser{
+            Uid:         data.Unique, // Mapped from incoming User struct
+            Name:        data.Name,   // User name
+            Email:       data.Email,  // User email[cite: 1]
+            Provider:    data.Provider,
+            Token:       newToken,    // Session token[cite: 1]
+            Avatar:      data.Picture,// Avatar URL[cite: 1]
+            PushToken:   "",          // Optional push token default[cite: 1]
+            Bio:         "",          // Default empty bio[cite: 1]
+            Phone:       "",          // Default empty phone[cite: 1]
+            Requests:    []string{},  // Initial empty array[cite: 1]
+            Connections: []string{},  // Initial empty array[cite: 1]
+            Majors:      []string{},  // Initial empty array[cite: 1]
+            Events:      []string{},  // Initial empty array[cite: 1]
+        }
 
-		return token.String(), nil
-	} else {
-		token, err := uuid.NewRandom()
-		if err != nil {
-			return "", errors.New("UUID")
-		}
+        if err := config.Db.Create(&newUser).Error; err != nil {
+            return "", errors.New("failed to insert user")
+        }
 
-		// Assuming you need to filter by some unique identifier, e.g., user ID, email, etc.
-		filter := bson.D{{Key: "_id", Value: result["_id"]}} // Replace with your actual filter, e.g., user ID or email
+        return newToken, nil
+    } else if err != nil {
+        return "", err
+    }
 
-		update := bson.D{
-			{Key: "$set", Value: bson.D{{Key: "token", Value: token.String()}}},
-			{Key: "$unset", Value: bson.D{{Key: "pushToken", Value: ""}}}, // `true` is not a valid value for `$unset`, replace it with an empty string.
-		}
+    // 3. Account exists, update the session token
+    updates := map[string]interface{}{
+        "token": newToken,
+    }
 
-		_, err = config.GetCollection("users").UpdateOne(context.Background(), filter, update)
-		if err != nil {
-			return "", err // Handle the update error
-		}
+    if err := config.Db.Model(&dbUser).Updates(updates).Error; err != nil {
+        return "", err
+    }
 
-		// Account exists, return the updated token
-		return token.String(), nil
-	}
+    return newToken, nil
 }
