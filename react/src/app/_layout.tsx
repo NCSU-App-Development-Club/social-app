@@ -24,6 +24,10 @@ export default function RootLayout() {
         }}>
         <Stack.Screen name="index" options={{ title: "Login" }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="schedule"
+          options={{ headerShown: false, presentation: "fullScreenModal" }}
+        />
       </Stack>
     </ThemeProvider>
   );
