@@ -131,7 +131,9 @@ export default function Events() {
 
         <Text style={{ marginTop: 20, marginBottom: 10 }}>
           {userData.events[eventIndex].attendees.length} other
-          {userData.events[eventIndex].attendees.length != 1 ? "s are" : " is"}{" "}
+          {userData.events[eventIndex].attendees.length != 1
+            ? "s are"
+            : " is"}{" "}
           down
         </Text>
 
