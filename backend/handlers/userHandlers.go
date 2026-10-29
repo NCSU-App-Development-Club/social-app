@@ -1,45 +1,60 @@
 package handlers
 
 import (
-    "time"
+	"errors"
+	"time"
 
-    "social-api/config"
+	"social-api/config"
 
-    "github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2"
+	"gorm.io/gorm"
 )
 
 func GetUserHomeEvents(c *fiber.Ctx) error {
-    // 1. Retrieve the user from Fiber locals (populated by AuthMiddleware)
-    userVal := c.Locals("user")
-    user, ok := userVal.(config.DbUser)
-    if !ok {
-        return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-            "error": "Unauthorized or invalid user session",
-        })
+	// 1. Retrieve the user from Fiber locals
+	userVal := c.Locals("user")
+	user, ok := userVal.(config.DbUser)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "Unauthorized or invalid user session",
+		})
+	}
+
+	var event config.Event
+
+	// 2. First check for a CURRENT / ONGOING event:
+	// start_time <= now AND end_time > now
+	nowStr := time.Now().Format("2006-01-02T15:04:05-07:00")
+
+    // 2. Check for a CURRENT / ONGOING event
+    err := config.Db.Where("creator = ? AND start_time <= ? AND end_time > ?", user.Uid, nowStr, nowStr).
+        Order("start_time ASC").
+        First(&event).Error
+
+    if errors.Is(err, gorm.ErrRecordNotFound) {
+        // 3. Check for the NEXT UPCOMING event
+        err = config.Db.Where("creator = ? AND start_time > ?", user.Uid, nowStr).
+            Order("start_time ASC").
+            First(&event).Error
     }
 
-    // 2. Get the target date from query parameters (e.g., ?date=2026-10-22)
-    targetDate := c.Query("date")
-    if targetDate == "" {
-        // Fixed: Go's time layout string must use the reference date 2006-01-02
-        targetDate = time.Now().Format("2006-01-02")
-    }
+	// Handle database query errors
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Return 200 with event set to null (or return custom status as needed)
+			return c.Status(fiber.StatusOK).JSON(fiber.Map{
+				"name":  user.Name,
+				"event": nil,
+			})
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to fetch event",
+		})
+	}
 
-    // 3. Initialize as an empty slice (ensures JSON serializes as [] instead of null if 0 events exist)
-    events := []config.Event{}
-
-    // Query events for that day where the user is the creator
-    err := config.Db.Where("creator = ? AND start_time LIKE ?", user.Uid, targetDate+"%").Find(&events).Error
-    if err != nil {
-        return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-            "error": "Failed to fetch user events",
-        })
-    }
-
-    // 4. Return the user's name and events array (empty [] if none found)
-    return c.Status(fiber.StatusOK).JSON(fiber.Map{
-        "name":   user.Name,
-        "date":   targetDate,
-        "events": events,
-    })
+	// 4. Return the user's name and the active/upcoming event
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"name":  user.Name,
+		"event": event,
+	})
 }

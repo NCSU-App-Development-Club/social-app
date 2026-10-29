@@ -13,6 +13,7 @@ func SetupUserRoutes(app *fiber.App) {
 
     // Existing routes
     userGroup.Get("/home", handlers.GetUserHomeEvents)
+    userGroup.Get("/event/:eventId", handlers.GetEvent)
     userGroup.Get("/profile/:uid", handlers.GetProfile)
     userGroup.Put("/profile/edit", handlers.UpdateProfile)
 
