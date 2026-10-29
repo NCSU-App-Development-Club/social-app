@@ -13,18 +13,15 @@ import (
 )
 
 // Helper to parse ICS timestamp strings (e.g., "20260817T150000" or with TZID) into time.Time
-func parseICSDateTime(val string) (time.Time, error) {
+func parseICSDateTime(val string, loc *time.Location) (time.Time, error) {
     val = strings.TrimSpace(val)
-    if t, err := time.Parse("20060102T150402Z", val); err == nil {
+    if strings.HasSuffix(val, "Z") {
+        return time.Parse("20060102T150405Z", val)
+    }
+    if t, err := time.ParseInLocation("20060102T150405", val, loc); err == nil {
         return t, nil
     }
-    if t, err := time.Parse("20060102T150402", val); err == nil {
-        return t, nil
-    }
-    if t, err := time.Parse("20060102", val); err == nil {
-        return t, nil
-    }
-    return time.Time{}, fiber.ErrBadRequest
+    return time.ParseInLocation("20060102", val, loc)
 }
 
 // Map ICS BYDAY abbreviation to Go time.Weekday
@@ -79,9 +76,11 @@ func UploadICal(c *fiber.Ctx) error {
 
     fileContentStr := string(fileBytes)
 
-    // Google Calendar exports glue END:VEVENT and BEGIN:VEVENT on the same line. 
-    // This splits them so the line scanner catches every event block.
-    fileContentStr = strings.ReplaceAll(fileContentStr, "END:VEVENTBEGIN:VEVENT", "END:VEVENT\nBEGIN:VEVENT")
+    // Normalize line endings (the file mixes \r\n and bare \r), then unfold continuation lines
+    fileContentStr = strings.ReplaceAll(fileContentStr, "\r\n", "\n")
+    fileContentStr = strings.ReplaceAll(fileContentStr, "\r", "\n")
+    fileContentStr = strings.ReplaceAll(fileContentStr, "\n ", "")
+    fileContentStr = strings.ReplaceAll(fileContentStr, "\n\t", "")
 
     scanner := bufio.NewScanner(strings.NewReader(fileContentStr))
     importedCount := 0
@@ -116,20 +115,27 @@ func UploadICal(c *fiber.Ctx) error {
             if strings.HasPrefix(strings.ToUpper(trimmed), "EXDATE") {
                 parts := strings.SplitN(trimmed, ":", 2)
                 if len(parts) == 2 {
-                    rawDates := parts[1]
-                    for _, d := range strings.Split(rawDates, ",") {
+                    for _, d := range strings.Split(parts[1], ",") {
                         exdates = append(exdates, strings.TrimSpace(d))
                     }
                 }
                 continue
             }
 
-            parts := strings.SplitN(line, ":", 2)
+            parts := strings.SplitN(trimmed, ":", 2)
             if len(parts) == 2 {
                 keyPart := parts[0]
-                val := parts[1]
-                baseKey := strings.Split(keyPart, ";")[0]
-                currentEvent[strings.ToUpper(baseKey)] = val
+                baseKey := strings.ToUpper(strings.Split(keyPart, ";")[0])
+                currentEvent[baseKey] = parts[1]
+
+                // Capture TZID from e.g. DTSTART;TZID=America/New_York
+                if baseKey == "DTSTART" {
+                    for _, p := range strings.Split(keyPart, ";")[1:] {
+                        if strings.HasPrefix(strings.ToUpper(p), "TZID=") {
+                            currentEvent["TZID"] = p[5:]
+                        }
+                    }
+                }
             }
         }
     }
@@ -160,11 +166,15 @@ func expandAndSaveEvent(evt map[string]string, exdates []string, userUID string)
     description := evt["DESCRIPTION"]
     location := evt["LOCATION"]
 
-    dtStartRaw := evt["DTSTART"]
-    dtEndRaw := evt["DTEND"]
+    loc := time.UTC
+    if tz := evt["TZID"]; tz != "" {
+        if l, err := time.LoadLocation(tz); err == nil {
+            loc = l
+        }
+    }
 
-    startTime, err1 := parseICSDateTime(dtStartRaw)
-    endTime, err2 := parseICSDateTime(dtEndRaw)
+    startTime, err1 := parseICSDateTime(evt["DTSTART"], loc)
+    endTime, err2 := parseICSDateTime(evt["DTEND"], loc)
     if err1 != nil || err2 != nil {
         return 0
     }
@@ -174,11 +184,8 @@ func expandAndSaveEvent(evt map[string]string, exdates []string, userUID string)
     // Build exception date lookup set
     exDateSet := make(map[string]bool)
     for _, exd := range exdates {
-        if t, err := parseICSDateTime(exd); err == nil {
-            exDateSet[t.Format("20060102")] = true
-        } else {
-            clean := strings.Split(exd, "T")[0]
-            exDateSet[clean] = true
+        if t, err := parseICSDateTime(exd, loc); err == nil {
+            exDateSet[t.In(loc).Format("20060102")] = true
         }
     }
 
@@ -190,7 +197,7 @@ func expandAndSaveEvent(evt map[string]string, exdates []string, userUID string)
         for _, part := range strings.Split(rrule, ";") {
             if strings.HasPrefix(part, "UNTIL=") {
                 untilStr := strings.TrimPrefix(part, "UNTIL=")
-                if t, err := parseICSDateTime(untilStr); err == nil {
+                if t, err := parseICSDateTime(untilStr, loc); err == nil {
                     untilTime = t
                 }
             }
@@ -228,7 +235,7 @@ func expandAndSaveEvent(evt map[string]string, exdates []string, userUID string)
 
         if matchedDay && !exDateSet[dateKey] {
             instanceStart := time.Date(currDate.Year(), currDate.Month(), currDate.Day(),
-                startTime.Hour(), startTime.Minute(), startTime.Second(), 0, startTime.Location())
+                startTime.Hour(), startTime.Minute(), startTime.Second(), 0, loc)
             instanceEnd := instanceStart.Add(duration)
 
             instanceID := baseUID + "_" + dateKey
