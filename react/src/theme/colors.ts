@@ -47,7 +47,7 @@ export const darkColors: AppColors = {
   notification: "#F2B8B5",
 };
 
-export function resolveScheme(colorScheme: ColorSchemeName): ColorScheme {
+export function resolveScheme(colorScheme: ColorSchemeName | null): ColorScheme {
   return colorScheme === "dark" ? "dark" : "light";
 }
 
