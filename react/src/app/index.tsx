@@ -17,6 +17,10 @@ export default function Login() {
             label="Skip login"
             onPress={() => router.navigate("/profile")}
           />
+          <Button
+            label="Profile edit"
+            onPress={() => router.navigate("/profile/edit")}
+          />
         </Column>
       </Host>
     </Screen>
